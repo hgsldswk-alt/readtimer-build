@@ -1,0 +1,79 @@
+name: ReadTimer
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: zh-Hans
+  knownRegions: [zh-Hans, en, zh-Hant, ja, ko, de, es, fr, pt-BR, it, nl]
+settings:
+  base:
+    APP_ID: com.hgsldswk.readtimer
+    APP_STORE_ID: "6837217650"
+    MARKETING_VERSION: "1.0.2"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG"
+targets:
+  ReadTimer:
+    type: application
+    platform: iOS
+    sources: [ReadTimer, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_ID)
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: ReadTimer AppStore
+    info:
+      path: ReadTimer/Info.plist
+      properties:
+        CFBundleDisplayName: 阅读计时
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+        APP_STORE_ID: $(APP_STORE_ID)
+  ReadTimerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [ReadTimerTests, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+  ReadTimerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ReadTimerUITests]
+    dependencies:
+      - target: ReadTimer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ReadTimer
+schemes:
+  ReadTimer:
+    build:
+      targets:
+        ReadTimer: all
+        ReadTimerTests: [test]
+    test:
+      config: Debug
+      targets: [ReadTimerTests]
+  ReadTimerUI:
+    build:
+      targets:
+        ReadTimer: all
+        ReadTimerUITests: [test]
+    test:
+      config: Debug
+      targets: [ReadTimerUITests]

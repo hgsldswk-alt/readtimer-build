@@ -1,0 +1,312 @@
+import XCTest
+
+final class FlowUITests: XCTestCase {
+    private enum Language: String, CaseIterable {
+        case hans = "zh-Hans", english = "en", hant = "zh-Hant"
+        var locale: String {
+            switch self {
+            case .hans: return "zh_CN"
+            case .english: return "en_US"
+            case .hant: return "zh_TW"
+            }
+        }
+    }
+
+    private var app: XCUIApplication!
+
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+        app = XCUIApplication()
+    }
+
+    private func launch(_ arguments: [String] = [], reset: Bool = true, language: Language = .hans,
+                        environment: [String: String] = [:]) {
+        if app.state != .notRunning { app.terminate() }
+        app.launchArguments = ["-ui-testing", "-AppleLanguages", "(\(language.rawValue))",
+                               "-AppleLocale", language.locale] + (reset ? ["-reset"] : []) + arguments
+        app.launchEnvironment = environment
+        app.launch()
+    }
+
+    private func tap(_ id: String, file: StaticString = #filePath, line: UInt = #line) {
+        let query = app.buttons.matching(identifier: id)
+        XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 10), id, file: file, line: line)
+        for _ in 0..<4 {
+            if let button = query.allElementsBoundByIndex.last(where: { $0.isHittable && $0.isEnabled }) {
+                button.tap()
+                return
+            }
+            if query.allElementsBoundByIndex.contains(where: \.isHittable) {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            } else { app.swipeUp() }
+        }
+        XCTFail("No hittable, enabled button: \(id)", file: file, line: line)
+    }
+
+    private func visible(_ id: String, file: StaticString = #filePath, line: UInt = #line) {
+        let node = app.descendants(matching: .any).matching(identifier: id).firstMatch
+        XCTAssertTrue(node.waitForExistence(timeout: 10), id, file: file, line: line)
+    }
+
+    private func choose(prefix: String, text: String) {
+        let query = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", prefix, text))
+        XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 10), prefix + text)
+        for _ in 0..<4 {
+            if let button = query.allElementsBoundByIndex.first(where: \.isHittable) { button.tap(); return }
+            app.swipeUp()
+        }
+        XCTFail("No matching button: " + text)
+    }
+
+    private func fill(_ identifier: String, _ text: String, clearing: Bool = false) {
+        let field = app.textFields[identifier]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), identifier)
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)).tap()
+        if clearing, let value = field.value as? String, !value.isEmpty, value != field.placeholderValue {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+        }
+        field.typeText(text)
+    }
+
+    private func add(_ title: String, page: String? = nil, total: String? = nil, first: Bool = true) {
+        if first { tap("home.add") }
+        else { tap("home.switch"); tap("books.add") }
+        fill("book.name", title)
+        if let page { fill("book.page", page) }
+        if let total { fill("book.total", total) }
+        tap("book.save")
+        let book = app.staticTexts["home.book"]
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND label == %@", title),
+                                                  object: book)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 10), .completed)
+    }
+
+    private func assertPage(_ page: String) {
+        let item = app.staticTexts["home.page"]
+        let matching = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND label == %@", page),
+                                                  object: item)
+        XCTAssertEqual(XCTWaiter.wait(for: [matching], timeout: 10), .completed, page)
+    }
+
+    private func shot(_ name: String) throws {
+        let screenshot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let env = ProcessInfo.processInfo.environment
+        if let path = env["SHOTS_DIR"] ?? env["TEST_RUNNER_SHOTS_DIR"] {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try screenshot.pngRepresentation.write(to: directory.appendingPathComponent(name + ".png"))
+        }
+    }
+
+    func testFreshStartPauseRunningAndPendingRelaunch() {
+        launch()
+        visible("home.add")
+        XCTAssertFalse(app.staticTexts["paywall.title"].exists)
+        XCTAssertEqual(app.alerts.count, 0)
+        add("Paper Book", page: "84", total: "240")
+        assertPage("84")
+        tap("home.start")
+        tap("timer.pause")
+        tap("timer.resume")
+        XCTAssertFalse(app.buttons["home.switch"].exists)
+        launch(reset: false)
+        visible("timer.elapsed")
+        tap("timer.end")
+        visible("entry.page")
+        XCTAssertEqual(app.textFields["entry.page"].value as? String, "84")
+        fill("entry.page", "102", clearing: true)
+        let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "102"),
+                                               object: app.textFields["entry.page"])
+        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 5), .completed)
+        launch(reset: false)
+        visible("entry.page")
+        XCTAssertEqual(app.textFields["entry.page"].value as? String, "102")
+        tap("entry.save")
+        assertPage("102")
+        tap("home.editSaved")
+        fill("entry.page", "100", clearing: true)
+        tap("entry.save")
+        assertPage("100")
+    }
+
+    func testBookSwitchNoInitialPageManualBookmarkHistoryAndCSV() {
+        launch()
+        add("Book One")
+        assertPage("尚未记页")
+        tap("home.start")
+        tap("timer.end")
+        tap("entry.save")
+        assertPage("尚未记页")
+        tap("home.bookmark")
+        fill("entry.page", "24")
+        tap("entry.save")
+        assertPage("24")
+        add("Book Two", page: "9", first: false)
+        tap("home.switch")
+        choose(prefix: "books.select.", text: "Book One")
+        assertPage("24")
+        tap("home.history")
+        tap("history.current")
+        tap("history.manual")
+        fill("entry.page", "28")
+        fill("entry.duration", "15")
+        tap("entry.save")
+        tap("history.export")
+        visible("share.requested")
+        choose(prefix: "history.entry.", text: "仅页码")
+        fill("entry.page", "22", clearing: true)
+        tap("entry.save")
+        tap("sheet.done")
+        assertPage("28")
+    }
+
+    func testSamePageCorrectionAndDeletePrompts() {
+        launch(["-demo"])
+        tap("home.start")
+        tap("timer.end")
+        tap("entry.save")
+        assertPage("84")
+        tap("home.bookmark")
+        fill("entry.page", "300", clearing: true)
+        visible("entry.total")
+        tap("entry.save")
+        visible("form.error")
+        fill("entry.total", "320", clearing: true)
+        tap("entry.save")
+        assertPage("300")
+        tap("home.editSaved")
+        tap("entry.delete")
+        tapDialogButton("删除记录")
+        assertPage("84")
+    }
+
+    private func tapDialogButton(_ title: String) {
+        let scopes = [app.alerts.buttons, app.sheets.buttons, app.popovers.buttons]
+        for scope in scopes {
+            if let item = scope.matching(NSPredicate(format: "label == %@", title))
+                .allElementsBoundByIndex.last(where: \.isHittable) {
+                item.tap()
+                return
+            }
+        }
+        let match = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", title, "entry.delete"))
+        XCTAssertTrue(match.firstMatch.waitForExistence(timeout: 5))
+        guard let item = match.allElementsBoundByIndex.last(where: \.isHittable) else {
+            XCTFail(title)
+            return
+        }
+        item.tap()
+    }
+
+    func testAnonymousShareAndFreeTitleToggleAfterExpiry() {
+        launch(["-demo", "-expired"])
+        tap("home.share")
+        visible("share.anonymous")
+        let toggle = app.switches["share.includeTitles"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        visible("share.named")
+        tap("share.image")
+        visible("share.requested")
+        tap("sheet.done")
+        tap("home.share")
+        visible("share.anonymous")
+        tap("share.copyCaption")
+        tap("share.image")
+        visible("share.requested")
+    }
+
+    func testGoalEditingAndExpiredImportPlusFreeReadingPath() {
+        launch(["-demo", "-paid-mode"])
+        tap("home.settings")
+        tap("settings.goal")
+        fill("goal.minutes", "60")
+        tap("goal.save")
+        tap("goal.copy")
+        visible("goal.code")
+        launch(["-demo", "-expired"], reset: false,
+               environment: ["READTIMER_TEST_IMPORT": " \nREADWEEK1-090\n"])
+        visible("home.goalProgress")
+        tap("home.settings")
+        tap("settings.goal")
+        visible("goal.progress")
+        XCTAssertFalse(app.buttons["goal.save"].exists)
+        tap("sheet.done")
+        tap("settings.import")
+        tap("import.preview")
+        visible("import.value")
+        XCTAssertTrue(app.staticTexts["import.value"].label.contains("90"))
+        tap("import.apply")
+        tap("settings.export")
+        visible("share.requested")
+        tap("sheet.done")
+        tap("home.start")
+        tap("timer.end")
+        tap("entry.save")
+        assertPage("84")
+        tap("home.history")
+        visible("history.weekTotal")
+        XCTAssertFalse(app.buttons["history.weeks"].exists)
+    }
+
+    func testFreePeriodHidesPurchaseAndKeepsTheReadingPath() {
+        launch(["-demo", "-free-mode"])
+        tap("home.settings")
+        visible("settings.goal")
+        XCTAssertFalse(app.buttons["settings.pro"].exists)
+        tap("sheet.done")
+        tap("home.start")
+        tap("timer.end")
+        tap("entry.save")
+        assertPage("84")
+        tap("home.history")
+        visible("history.weeks")
+        tap("history.export")
+        visible("share.requested")
+    }
+
+    func testStoreScreenshots() throws {
+        for language in Language.allCases {
+            let prefix = "store-\(language.rawValue)-"
+            let args = ["-demo", "-store-shots"]
+            launch(args, language: language, environment: ["READTIMER_SHOT_PAGE": "102"])
+            assertPage("84")
+            try shot(prefix + "01-home")
+            tap("home.start")
+            visible("timer.elapsed")
+            XCTAssertEqual(app.staticTexts["timer.elapsed"].label, "24:18")
+            try shot(prefix + "02-timer")
+            tap("timer.end")
+            visible("entry.page")
+            XCTAssertEqual(app.textFields["entry.page"].value as? String, "102")
+            XCTAssertEqual(app.staticTexts["entry.elapsed"].label, "24:18")
+            try shot(prefix + "03-finish")
+            launch(args, language: language)
+            tap("home.history")
+            visible("history.weekTotal")
+            try shot(prefix + "04-history")
+            tap("sheet.done")
+            tap("home.share")
+            visible("share.anonymous")
+            XCTAssertTrue(app.buttons["share.image"].waitForExistence(timeout: 10))
+            let rendered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"),
+                                                       object: app.buttons["share.image"])
+            XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 10), .completed)
+            try shot(prefix + "05-week-card")
+        }
+    }
+
+    func testPaidScreenshotAndRestoreEntry() throws {
+        launch(["-paywall", "-paid-mode"])
+        visible("paywall.title")
+        visible("paywall.buy")
+        visible("paywall.trial")
+        visible("paywall.restore")
+        try shot("paid-01-paywall")
+    }
+}
